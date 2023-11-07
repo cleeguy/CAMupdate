@@ -1,0 +1,558 @@
+import os
+import sys
+import customtkinter as ctk
+from docx import Document
+from docx.shared import Pt, RGBColor
+import docx.opc.constants
+import tkinter as tk
+import tkinter.messagebox as messagebox
+import win32com.client as win32
+import time
+from time import sleep
+import subprocess
+
+left_frame = None
+right_frame = None
+root = None  # Add this line
+
+
+
+vars = []
+custom_msg_entries = []  # List to store custom message text boxes
+current_category = None
+
+
+def get_resource_path(relative_path):
+    """Get the absolute path to a resource, works for dev and for PyInstaller."""
+    try:
+        base_path = sys._MEIPASS
+    except Exception:
+        base_path = os.path.abspath(".")
+    return os.path.join(base_path, relative_path)
+
+def show_copied_to_clipboard_message():
+    """Update the label to notify the user that the content has been copied to the clipboard."""
+    clipboard_msg_label.config(text="Template has been copied to clipboard. Just paste in Teams chat!")
+
+
+def generate_word_template(job_number):
+    # Define the file path first
+    file_path = get_resource_path(f"template_{job_number}.docx")
+    
+    doc = Document()
+    doc.add_heading('Daily CAM Update', level=2)
+    doc.add_heading(f'Job {job_number}', level=2)
+    doc.add_heading(f'Expected Completion Day: {selected_day_global}', level=2)
+    
+    # Add a horizontal line under "Expected Completion Day"
+    p = doc.add_paragraph()
+    run = p.add_run('─' * 77)  # Add 77 '─' characters to create a line
+    run.font.name = 'Symbol'  # Set the font to 'Symbol' to ensure the line is displayed correctly
+    
+    for category, messages in selected_phrases.items():
+        if messages:
+            doc.add_heading(category, level=2)
+            for message in messages:
+             doc.add_paragraph(message, style='ListBullet')
+    
+    # Add the additional content at the bottom
+    doc.add_heading("Build Review", level=2)
+    
+    
+    # Create a new paragraph for the hyperlink
+    p_hyperlink = doc.add_paragraph("Build Review - ", style='ListBullet')
+    
+    # Add the dynamic hyperlink
+    link = f"https://hadrianautomation.sharepoint.us/teams/operations-email-for-teams-CAMOPS/SitePages/J{job_number}.aspx"
+    add_hyperlink(p_hyperlink, link, link, RGBColor(0, 0, 255), True)
+    
+    # Save the document
+    doc.save(file_path)
+
+    # Open the document in Word using pywin32
+    word = win32.gencache.EnsureDispatch('Word.Application')
+    doc = word.Documents.Open(file_path)
+    word.Visible = True  # Make Word visible
+
+   
+
+    # Select all the content and copy to clipboard
+    word.Selection.WholeStory()
+    word.Selection.Copy()
+
+    time.sleep(1)  # Wait for 1 seconds
+
+    # Close the Word document
+    doc.Close(False)
+
+    # Close the Word application and release the COM object
+    word.Quit()
+    word = None
+    
+       # Remove the generated file
+    os.remove(file_path)
+
+    show_copied_to_clipboard_message()
+
+
+
+def add_hyperlink(paragraph, url, text, color, underline):
+    """
+    A function that places a hyperlink within a paragraph object.
+
+    :param paragraph: The paragraph we are adding the hyperlink to.
+    :param url: A string containing the required url
+    :param text: The text displayed for the url
+    :return: The hyperlink object
+    """
+    # This gets access to the document.xml.rels file and gets a new relation id value
+    part = paragraph.part
+    r_id = part.relate_to(url, docx.opc.constants.RELATIONSHIP_TYPE.HYPERLINK, is_external=True)
+
+    # Create the w:hyperlink tag and add needed values
+    hyperlink = docx.oxml.shared.OxmlElement('w:hyperlink')
+    hyperlink.set(docx.oxml.shared.qn('r:id'), r_id, )
+
+    # Create a w:r element and a new w:rPr element
+    new_run = docx.oxml.shared.OxmlElement('w:r')
+    rPr = docx.oxml.shared.OxmlElement('w:rPr')
+
+    # Join all the xml elements together add add the required text to the w:r element
+    new_run.append(rPr)
+    new_run.text = text
+    hyperlink.append(new_run)
+
+    # Create a new Run object and add the hyperlink into it
+    r = paragraph.add_run()
+    r._element.append(hyperlink)  # Append the hyperlink to the run's element
+
+    # Add the required formatting
+    r.font.color.rgb = color
+    r.font.underline = underline
+
+    return hyperlink
+
+def clear_left_frame():
+    for widget in left_frame.winfo_children():
+        widget.destroy()
+
+
+def clear_right_frame():
+    for widget in right_frame.winfo_children():
+        widget.destroy()
+    custom_msg_entries.clear()  # Clear the list of custom message entries
+
+
+selected_day_global = None
+selected_button_clicked = False
+selection_made = False
+
+
+def select_day():
+    global selected_day_global, selected_button_clicked, selection_made, day_var
+    selected_day_global = day_var.get()
+    print(f"Expected Completion: {selected_day_global}")
+    selected_button_clicked = True  # Set the flag to True when a day is selected
+    clear_right_frame()  # Clear the right frame to remove the radio buttons
+
+    # Add the confirmation message
+    confirmation_label = ctk.CTkLabel(right_frame, text="Selection Completed", font=("Arial", 12, "bold"))
+    confirmation_label.pack(pady=20, padx=10, anchor="center")  # Display the label in the center of the right frame
+
+    selection_made = False
+
+def show_expected_completion_options():
+    global selected_day_global, day_var
+    clear_right_frame()
+    days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
+    day_var = tk.StringVar()
+
+    def on_radio_select(value):
+        global selection_made
+        selection_made = True
+
+    for day in days:
+        radio_btn = tk.Radiobutton(right_frame, text=day, variable=day_var, value=day, indicatoron=0, height=2, width=50, relief="ridge", command=lambda value=day: on_radio_select(value))
+        radio_btn.pack(pady=10, padx=10, anchor="w")
+
+    select_btn = ctk.CTkButton(right_frame, text="Select", command=select_day, fg_color="#004880")
+    select_btn.place(relx=1.0, rely=1.0, anchor="se")
+
+
+def show_warning_popup(root, select_function=None, *args):
+    popup = ctk.CTkToplevel()
+    popup.title("Warning")
+    
+    # Ensure the popup stays on top
+    popup.attributes('-topmost', True)
+
+    # Set the icon for the popup window
+    popup.iconbitmap(get_resource_path("h.ico"))
+
+
+    user_choice = {"value": None}
+
+    label = ctk.CTkLabel(popup, text="You did not select these phrases.\nDo you want to do so now?")
+    label.pack(pady=20)
+
+    def on_yes():
+        # This will act as the select button function
+        if select_function:
+            select_function(*args)
+        user_choice["value"] = True
+        popup.destroy()
+
+    def on_no():
+        user_choice["value"] = False
+        popup.destroy()
+
+    yes_btn = ctk.CTkButton(popup, text="Yes", command=on_yes, fg_color="#004880")
+    yes_btn.pack(side="left", padx=10, pady=10)
+
+    no_btn = ctk.CTkButton(popup, text="No", command=on_no, fg_color="#004880")
+    no_btn.pack(side="right", padx=10, pady=10)
+
+    # Update the popup's position after all widgets have been added
+    popup.update_idletasks()  # This forces the window to draw itself and calculate its size
+
+    # Get the x and y coordinates of the mouse cursor
+    x = root.winfo_pointerx()
+    y = root.winfo_pointery()
+
+    # Set the geometry of the popup window to the mouse cursor's position
+    popup.geometry(f"+{x}+{y}")
+
+    popup.mainloop()
+    return user_choice["value"]
+
+
+
+def select_phrases(category, vars):
+    global selected_phrases, selection_made, custom_msg_entries, current_category
+    current_category = category  # Set the current category
+    selected_phrases[category] = [var.get() for var in vars if var.get()]
+    
+    # Add custom messages for the current category
+    for entry in custom_msg_entries:
+        if entry.get():
+            selected_phrases[category].append(entry.get())
+    
+    
+    # Clear the right frame to display the confirmation message
+    clear_right_frame()
+    
+    # Display a confirmation message
+    confirmation_label = ctk.CTkLabel(right_frame, text="Phrases Selected", font=("Arial", 12, "bold"))
+    confirmation_label.pack(pady=20, padx=10, anchor="center")
+
+    # Reset the selection_made flag
+    selection_made = False
+
+
+
+
+
+
+
+
+def add_custom_msg_entry(column_frame, add_msg_btn):
+    # Create a new custom message entry
+    custom_msg_entry = ctk.CTkEntry(column_frame, width=225)
+    custom_msg_entry.pack(pady=5, padx=10, anchor="w")
+    custom_msg_entries.append(custom_msg_entry)
+
+    # Repack the "Add Msg" button below the new entry
+    add_msg_btn.pack_forget()
+    add_msg_btn.pack(pady=5, padx=10, anchor="w")
+
+def show_phrases(category):
+    global selected_phrases, selection_made, vars, current_category
+    current_category = category  # Set the current category
+    clear_right_frame()
+    phrases = predefined_phrases.get(category, [])
+    vars = []
+
+    # Create a PanedWindow to hold the two columns
+    paned_window = tk.PanedWindow(right_frame, orient=tk.HORIZONTAL)
+    paned_window.pack(fill=tk.BOTH, expand=1)
+
+    # Create two frames for the two columns
+    left_column = tk.Frame(paned_window)
+    right_column = tk.Frame(paned_window)
+    paned_window.add(left_column)
+    paned_window.add(right_column)
+
+    for index, phrase in enumerate(phrases):
+        if phrase == "<Custom Message>":
+            custom_msg_entry = ctk.CTkEntry(left_column if index < 11 else right_column, width=225)
+            custom_msg_entry.pack(pady=5, padx=10, anchor="w")
+            custom_msg_entries.append(custom_msg_entry)
+
+            # Add "Add Msg" button
+            add_msg_btn = ctk.CTkButton(left_column if index < 11 else right_column, text="Add Msg", command=lambda: add_custom_msg_entry(left_column if index < 11 else right_column, add_msg_btn), fg_color="#004880", width=125)
+            add_msg_btn.pack(pady=5, padx=10, anchor="w")
+        else:
+            var = tk.StringVar()  # Define the variable before using it
+
+            def on_check_select(*args):
+                global selection_made
+                selection_made = True
+
+            chk = tk.Checkbutton(left_column if index < 11 else right_column, text=phrase, variable=var, onvalue=phrase, offvalue="", command=on_check_select)
+            chk.pack(pady=5, padx=10, anchor="w")  # Don't forget to pack the checkbox
+            
+
+        
+    select_btn = ctk.CTkButton(right_frame, text="Select", command=lambda: select_phrases(category, vars),bg_color="#FAE428", fg_color="#004880")
+    select_btn.place(relx=1.0, rely=1.0, anchor="se")
+
+
+def generate_template_for_job(root):
+    global right_frame, clipboard_msg_label
+    
+    clear_right_frame()
+    
+    input_frame = tk.Frame(right_frame)
+    input_frame.pack(pady=20, padx=20, ipadx=0, ipady=0)
+
+    label = tk.Label(input_frame, text="Job #")
+    label.grid(row=0, column=0, padx=(20, 10), pady=10)
+
+    job_number_entry = tk.Entry(input_frame, width=10)
+    job_number_entry.grid(row=0, column=1, padx=10, pady=10)
+    job_number_entry.configure(validate="key", validatecommand=(root.register(lambda P: P == "" or (P.isdigit() and len(P) <= 5)), '%P'))
+    job_number_entry.focus_set()
+    job_number_entry.bind('<Return>', lambda event=None: on_submit())
+
+    def on_submit():
+        job_number = job_number_entry.get()
+        if job_number:
+            generate_word_template(job_number)
+    
+    submit_btn = ctk.CTkButton(input_frame, text="Generate", command=on_submit, fg_color="#004880")
+    submit_btn.grid(row=1, column=0, columnspan=2, padx=(20, 20), pady=20)
+
+    
+
+    # Add a label to display the clipboard message
+    clipboard_msg_label = tk.Label(input_frame, text="", fg="green")
+    clipboard_msg_label.grid(row=2, column=0, columnspan=2, padx=20, pady=10)
+
+
+
+predefined_phrases = {
+    "Today's Progress": [
+        "Designed Fixture",
+        "Released Part Material",
+        "Part OP10 Completed",
+        "Part OP20 Completed",
+        "Part OP30 Completed",
+        "Part Programming Completed",
+        "Reprogrammed Part Completed",
+        "Part Tool XML + Cycle Times Uploaded",
+        "Part Setup Sheets Completed",
+        "Code Review Completed",
+        "Flow Package Uploaded, CAM op closed.",
+        "Redesigned Fixture Completed",
+        "Released Fixture Material",
+        "Fixture OP10 Completed",
+        "Fixture OP20 Completed",
+        "Fixture OP30 Completed",
+        "Fixture Programming Completed",
+        "Reprogrammed Fixture Completed",      
+        "Fixture Tool XML + Cycle Times Uploaded",
+        "Fixture Setup Sheets Completed",
+        "Work Instructions Review",  
+        "<Custom Message>",      
+        
+        
+    ],
+    "Tomorrow's Goals": [
+        "Design Fixture",
+        "Release Part Material",
+        "Part OP10",
+        "Part OP20",
+        "Part OP30",
+        "Part Program Complete",
+        "Reprogram Part Complete",
+        "Part Tool XML + Cycle Times Upload",
+        "Part Setup Sheets Complete",
+        "Code Review Complete",
+        "Flow Package Uploaded, CAM OP closed.",
+        "Redesigned Fixture Complete",
+        "Release Fixture Material",
+        "Fixture OP10 Complete",
+        "Fixture OP20 Complete",
+        "Fixture OP30 Complete",
+        "Fixture Program Complete",
+        "Reprogram Fixture Complete",      
+        "Fixture Tool XML + Cycle Times Upload",
+        "Fixture Setup Sheets Complete",
+        "Work Instructions Review",        
+        "<Custom Message>",
+        
+    ],
+    "Blockers": [
+        "FLOW config,",
+        "CAD Model,",
+        "Print Issues,",
+        "Copilot Issues,",
+        "Flow Issues,",
+        "Waiting on",
+        "<Custom Message>",
+        
+    ],
+    "Proveout Support": [
+        "CAM - Threads",
+        "CAM - Drilling",
+        "CAM - Deburr/Edge Break",
+        "CAM - Fixture",
+        "CAM - Other",
+        "CAM - Cycle Time",
+        "CAM - Tooling",
+        "CAM - Probing",
+        "Ops - Work Instructions",
+        "Ops - Damage",
+        "Ops - Other",
+        "DFM - GD&T",
+        "DFM - Model",
+        "DFM - Other",
+        "<Custom Message>",
+        # ... add more phrases as needed ...
+    ],
+    "Main Phase Support": [
+        "CAM - Threads",
+        "CAM - Drilling",
+        "CAM - Deburr/Edge Break",
+        "CAM - Fixture",
+        "CAM - Other",
+        "CAM - Cycle Time",
+        "CAM - Tooling",
+        "CAM - Probing",
+        "Ops - Work Instructions",
+        "Ops - Damage",
+        "Ops - Other",
+        "DFM - GD&T",
+        "DFM - Model",
+        "DFM - Other",
+        "<Custom Message>",
+        # ... add more phrases as needed ...
+    ]    
+    
+}
+
+selected_phrases = {category: [] for category in predefined_phrases}
+
+
+def on_category_click(category):
+    global selected_button_clicked, selection_made, root  # Add root to the global variables list
+
+
+
+    if selection_made and not selected_button_clicked:
+        if current_category == "Expected Completion Day" and not selected_day_global:
+            if not show_warning_popup(root, select_day):  # Call select_day directly for this category
+                return
+        elif current_category in predefined_phrases and any([var.get() for var in vars]):
+            if not show_warning_popup(root, select_phrases, current_category, vars):
+                return
+
+    selected_button_clicked = False  # Reset the flag for the next category
+
+    if category == "Expected Completion Day":
+        show_expected_completion_options()
+    elif category in predefined_phrases:
+        show_phrases(category)
+    elif category == "Generate Template for Job":
+        generate_template_for_job(root)  # Pass the root variable here
+    elif category == "Exit":
+        root.destroy()  # Close the application
+    elif category == "NPI":
+        clear_right_frame()  # Clear the right frame
+        show_npi_sub_categories()
+
+
+def show_main_categories():
+    """Display the main categories in the left frame."""
+    clear_left_frame()
+    clear_right_frame()  # Clear the right frame
+    categories = ["NPI", "Proveout Support", "Main Phase Support"]
+    for category in categories:
+        btn = ctk.CTkButton(left_frame, text=category, width=25, fg_color="#004880", command=lambda cat=category: on_main_category_click(cat))
+        btn.pack(pady=10, padx=10, fill="x")
+
+
+def on_main_category_click(category):
+    """Handle the click event for the main categories."""
+    clear_left_frame()
+    if category == "NPI":
+        show_npi_sub_categories()
+    elif category in ["Proveout Support", "Main Phase Support"]:
+        show_sub_categories_for_proveout_and_main(category)
+
+def show_sub_categories_for_proveout_and_main(category):
+    """Display the sub-categories for Proveout and Main Phase in the left frame."""
+    clear_left_frame()
+    clear_right_frame()  # Clear the right frame to display the category name
+    
+
+    # Display the clicked category at the top in the left frame
+    btn = ctk.CTkButton(left_frame, text=category, width=25, fg_color="#004880")
+    btn.pack(pady=10, padx=10, fill="x")
+
+    # Display the "Generate Template for Job" button
+    generate_btn = ctk.CTkButton(left_frame, text="Generate Template for Job", width=25, fg_color="#004880", command=lambda: on_category_click("Generate Template for Job"))
+    generate_btn.pack(pady=10, padx=10, fill="x")
+
+    # Display the "Exit" button
+    exit_btn = ctk.CTkButton(left_frame, text="Exit", width=25, fg_color="#004880", command=lambda: on_category_click("Exit"))
+    exit_btn.pack(pady=10, padx=10, fill="x")
+
+    # Add a "Back" button to navigate back to the main categories
+    back_btn = ctk.CTkButton(left_frame, text="Back", width=25, fg_color="#004880", command=show_main_categories)
+    back_btn.pack(pady=10, padx=10, fill="x", side="bottom")
+
+    # Display the phrases for the selected category in the right frame
+    show_phrases(category)
+
+
+
+
+def show_npi_sub_categories():
+    """Display the NPI sub-categories in the left frame."""
+    clear_left_frame()
+    categories = ["Expected Completion Day", "Today's Progress", "Tomorrow's Goals", "Blockers", "Generate Template for Job", "Exit"]
+    for category in categories:
+        btn = ctk.CTkButton(left_frame, text=category, width=25, fg_color="#004880", command=lambda cat=category: on_category_click(cat))
+        btn.pack(pady=10, padx=10, fill="x")
+
+    # Add a "Back" button to navigate back to the main categories
+    back_btn = ctk.CTkButton(left_frame, text="Back", width=25, fg_color="#004880", command=show_main_categories)
+    back_btn.pack(pady=10, padx=10, fill="x", side="bottom")
+
+
+
+
+
+    
+
+def main():
+    global left_frame, right_frame, root  # Add root to the global variables list
+    root = ctk.CTk()
+    root.title("Daily CAM Update Tool")
+    root.geometry("800x600")
+    root.iconbitmap(get_resource_path("h.ico"))
+
+    left_frame = ctk.CTkFrame(root, fg_color="#ffffff")
+    left_frame.pack(side="left", fill="y", padx=10, pady=10)
+
+    right_frame = ctk.CTkFrame(root, fg_color="#ffffff")
+    right_frame.pack(side="right", fill="both", expand=True, padx=20, pady=10)
+
+    # Display the main categories when the application starts
+    show_main_categories()
+
+    root.mainloop()
+
+if __name__ == "__main__":
+    main()
